@@ -1,0 +1,20 @@
+services:
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tradecorp-modulaire-pyspark:latest
+    container_name: tradecorp-modulaire-pyspark
+    env_file:
+      - .env
+    ports:
+      - "8890:8888"
+      - "4050:4040"
+    volumes:
+      - ./src:/home/jovyan/src
+      - ./tests:/home/jovyan/tests
+      - ./data:/home/jovyan/data
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      PYTHONPATH: "/home/jovyan/src"
+    restart: unless-stopped
