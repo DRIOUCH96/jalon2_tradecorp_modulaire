@@ -1,0 +1,22 @@
+# Secrets locaux
+.env
+# Python 
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Données temporaires et résultats locaux
+data/tmp/
+data/output/
+
+# Fichiers générés par Spark
+*.crc
+
+# Fichiers système
+.DS_Store
+Thumbs.db
