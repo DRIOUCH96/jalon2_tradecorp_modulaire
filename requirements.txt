@@ -1,3 +1,4 @@
 azure-storage-blob
 requests
 pytest
+apache-airflow-providers-docker==3.11.0
