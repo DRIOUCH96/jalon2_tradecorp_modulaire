@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import pendulum
 from airflow import DAG
+from docker.types import Mount
 
 
 DEFAULT_ARGS = {
@@ -11,6 +12,35 @@ DEFAULT_ARGS = {
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
+
+HOST_PROJECT_PATH = (
+    "//c/Users/driou/Downloads/"
+    "jalon2_tradecorp_modulaire"
+)
+
+SPARK_IMAGE = "tradecorp-modulaire-pyspark:latest"
+DOCKER_NETWORK = "tradecorp-modulaire-network"
+AIRFLOW_ENV_FILE = "/opt/airflow/.env"
+
+DOCKER_MOUNTS = [
+    Mount(
+        source=f"{HOST_PROJECT_PATH}/src",
+        target="/home/jovyan/src",
+        type="bind",
+        read_only=True,
+    ),
+    Mount(
+        source=f"{HOST_PROJECT_PATH}/data",
+        target="/home/jovyan/data",
+        type="bind",
+    ),
+    Mount(
+        source=f"{HOST_PROJECT_PATH}/.env",
+        target="/home/jovyan/.env",
+        type="bind",
+        read_only=True,
+    ),
+]
 
 
 with DAG(
