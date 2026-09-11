@@ -47,23 +47,49 @@ def download_business_csvs(
 
     return local_paths
 
-# Lecture des fichiers métier avec Spark
+# Chargement des fichiers métier avec Spark
+def load_business_csvs(
+    spark: SparkSession,
+    source: str | Path,
+) -> dict[str, DataFrame]:
+    """Lit les huit CSV métier déjà présents localement."""
+
+    source_path = Path(source)
+
+    missing_files = [
+        filename
+        for filename in BUSINESS_CSV_FILES
+        if not (source_path / filename).is_file()
+    ]
+
+    if missing_files:
+        raise FileNotFoundError(
+            "Fichiers métier manquants : "
+            + ", ".join(missing_files)
+        )
+
+    return {
+        Path(filename).stem: spark.read.csv(
+            str(source_path / filename),
+            header=True,
+            inferSchema=True,
+        )
+        for filename in BUSINESS_CSV_FILES
+    }
+
+
 def read_business_csvs(
     spark: SparkSession,
     destination: str | Path,
 ) -> dict[str, DataFrame]:
-    """Télécharge et lit les huit CSV métier avec Spark."""
+    """Télécharge puis lit les huit CSV métier."""
 
-    local_paths = download_business_csvs(destination)
+    download_business_csvs(destination)
 
-    return {
-        table_name: spark.read.csv(
-            local_path,
-            header=True,
-            inferSchema=True,
-        )
-        for table_name, local_path in local_paths.items()
-    }
+    return load_business_csvs(
+        spark,
+        destination,
+    )
 
 # Téléchargement des fichiers de référence avec Spark
 def download_reference_files(
@@ -102,31 +128,54 @@ def download_reference_files(
     return local_paths
 
 # Lecture des fichiers de référence avec Spark
-def read_reference_files(
+def load_reference_files(
     spark: SparkSession,
-    destination: str | Path,
+    source: str | Path,
 ) -> tuple[DataFrame, dict[str, float]]:
-    """Télécharge et lit le mapping pays-devise et les taux."""
+    """Lit les références déjà présentes localement."""
 
-    local_paths = download_reference_files(destination)
+    source_path = Path(source)
+
+    country_currency_path = (
+        source_path / "country_currency.csv"
+    )
+    exchange_rates_path = (
+        source_path / "exchange_rates.json"
+    )
+
+    missing_files = [
+        path.name
+        for path in (
+            country_currency_path,
+            exchange_rates_path,
+        )
+        if not path.is_file()
+    ]
+
+    if missing_files:
+        raise FileNotFoundError(
+            "Fichiers de référence manquants : "
+            + ", ".join(missing_files)
+        )
 
     country_currency = spark.read.csv(
-        local_paths["country_currency"],
+        str(country_currency_path),
         header=True,
         inferSchema=True,
     )
 
-    with Path(local_paths["exchange_rates"]).open(
+    with exchange_rates_path.open(
         "r",
         encoding="utf-8",
     ) as file_handle:
-        exchange_payload = json.load(file_handle)
+        exchange_data = json.load(file_handle)
 
-    rates = exchange_payload.get("rates")
+    rates = exchange_data.get("rates")
 
     if not isinstance(rates, dict):
         raise ValueError(
-            "Le fichier exchange_rates.json ne contient pas de taux valides"
+            "Le fichier exchange_rates.json "
+            "ne contient pas de taux valides"
         )
 
     exchange_rates = {
@@ -135,6 +184,20 @@ def read_reference_files(
     }
 
     return country_currency, exchange_rates
+
+
+def read_reference_files(
+    spark: SparkSession,
+    destination: str | Path,
+) -> tuple[DataFrame, dict[str, float]]:
+    """Télécharge puis lit les deux fichiers de référence."""
+
+    download_reference_files(destination)
+
+    return load_reference_files(
+        spark,
+        destination,
+    )
 def main() -> None:
     """Télécharge, valide et conserve les fichiers pour Airflow."""
 
