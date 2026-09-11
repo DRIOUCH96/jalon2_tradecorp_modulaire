@@ -20,3 +20,5 @@ data/output/
 # Fichiers système
 .DS_Store
 Thumbs.db
+# Journaux générés par Airflow
+logs/
