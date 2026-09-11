@@ -4,6 +4,7 @@ from datetime import timedelta
 
 import pendulum
 from airflow import DAG
+from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
 
@@ -41,7 +42,20 @@ DOCKER_MOUNTS = [
         read_only=True,
     ),
 ]
-
+DOCKER_OPERATOR_ARGS = {
+    "image": SPARK_IMAGE,
+    "docker_url": "unix://var/run/docker.sock",
+    "docker_conn_id": None,
+    "network_mode": DOCKER_NETWORK,
+    "auto_remove": "success",
+    "mount_tmp_dir": False,
+    "mounts": DOCKER_MOUNTS,
+    "env_file": AIRFLOW_ENV_FILE,
+    "environment": {
+        "PYTHONPATH": "/home/jovyan/src",
+    },
+    "working_dir": "/home/jovyan",
+}
 
 with DAG(
     dag_id="tradecorp_etl_pipeline",
@@ -52,4 +66,45 @@ with DAG(
     catchup=False,
     tags=["tradecorp", "etl", "spark"],
 ) as dag:
-    pass
+        fetch_exchange_rates = DockerOperator(
+        task_id="fetch_exchange_rates",
+        command=[
+            "python",
+            "/home/jovyan/src/fetch_exchange_rates.py",
+        ],
+        **DOCKER_OPERATOR_ARGS,
+        )
+
+        reader = DockerOperator(
+        task_id="reader",
+        command=[
+            "python",
+            "/home/jovyan/src/reader.py",
+        ],
+        **DOCKER_OPERATOR_ARGS,
+        )
+
+        transformer = DockerOperator(
+        task_id="transformer",
+        command=[
+            "python",
+            "/home/jovyan/src/transformer.py",
+        ],
+        **DOCKER_OPERATOR_ARGS,
+        )
+
+        writer = DockerOperator(
+        task_id="writer",
+        command=[
+            "python",
+            "/home/jovyan/src/writer.py",
+        ],
+        **DOCKER_OPERATOR_ARGS,
+        )
+
+        (
+        fetch_exchange_rates
+        >> reader
+        >> transformer
+        >> writer
+        )
