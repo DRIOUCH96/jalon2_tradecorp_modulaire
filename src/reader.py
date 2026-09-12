@@ -105,8 +105,13 @@ def download_reference_files(
         "reference",
     ).strip("/")
 
-    filenames = (
+    country_currency_filename = os.getenv(
+        "COUNTRY_CURRENCY_FILENAME",
         "country_currency.csv",
+    )
+
+    filenames = (
+        country_currency_filename,
         "exchange_rates.json",
     )
 
