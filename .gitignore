@@ -22,3 +22,5 @@ data/output/
 Thumbs.db
 # Journaux générés par Airflow
 logs/
+# Signal temporaire du FileSensor
+data/trigger/*.txt
