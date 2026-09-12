@@ -35,7 +35,13 @@ def write_parquet(
             parquet_directory,
         )
 
-        df.write.mode("overwrite").parquet(
+        LOGGER.info(
+            "Réduction du résultat à une partition Parquet"
+        )
+
+        df.coalesce(1).write.mode(
+            "overwrite"
+        ).parquet(
             str(parquet_directory)
         )
 
