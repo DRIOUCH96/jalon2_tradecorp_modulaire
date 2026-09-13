@@ -122,11 +122,17 @@ def main() -> None:
                 "/home/jovyan/data/tmp",
             )
         )
-
-        transformed_directory = (
+        default_transformed_directory = (
             temporary_root
             / "airflow"
             / "transformed"
+        )
+
+        transformed_directory = Path(
+            os.getenv(
+                "STAGING_PARQUET_PATH",
+                str(default_transformed_directory),
+            )
         )
 
         if not transformed_directory.is_dir():

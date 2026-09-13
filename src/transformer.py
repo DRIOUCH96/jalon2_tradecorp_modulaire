@@ -195,7 +195,16 @@ def main() -> None:
         staging_root = temporary_root / "airflow"
         business_directory = staging_root / "business"
         reference_directory = staging_root / "reference"
-        transformed_directory = staging_root / "transformed"
+        default_transformed_directory = (
+            staging_root / "transformed"
+        )
+
+        transformed_directory = Path(
+            os.getenv(
+                "STAGING_PARQUET_PATH",
+                str(default_transformed_directory),
+            )
+        )
 
         LOGGER.info(
             "Lecture des fichiers métier depuis %s",

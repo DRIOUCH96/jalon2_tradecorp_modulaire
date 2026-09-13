@@ -24,3 +24,5 @@ Thumbs.db
 logs/
 # Signal temporaire du FileSensor
 data/trigger/*.txt
+# Parquet intermédiaire partagé entre les tâches
+data/staging/
