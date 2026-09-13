@@ -1,4 +1,4 @@
-# TradeCorp Data Platform — Jalon 2, Partie 2
+# TradeCorp Data Platform — Jalon 2 et 3
 
 ## Objectif
 
@@ -236,3 +236,270 @@ clean/orders_enriched.parquet
 ```powershell
 docker compose down
 ```
+## Jalon 3 — Orchestration avec Apache Airflow
+
+### Objectif
+
+Le jalon 3 ajoute Apache Airflow au pipeline modulaire du jalon 2.
+
+Airflow ne réalise pas directement les transformations. Il orchestre des
+conteneurs temporaires construits à partir de l'image PySpark du projet.
+
+### Architecture Docker
+
+L'infrastructure contient trois services :
+
+- `spark` : environnement PySpark et JupyterLab ;
+- `postgres` : base de métadonnées Airflow ;
+- `airflow` : webserver, scheduler et exécution des tâches.
+
+```text
+Navigateur
+    │ http://localhost:8081
+    ▼
+Airflow ──────────────► PostgreSQL
+    │                    métadonnées
+    │ DockerOperator
+    ▼
+Conteneurs PySpark temporaires
+    │
+    ├── src
+    ├── data
+    └── .env
+```
+
+L'image Airflow utilise :
+
+```text
+apache/airflow:2.8.0
+apache-airflow-providers-docker:3.11.0
+```
+
+### Démarrage
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+L'interface est disponible à l'adresse :
+
+```text
+http://localhost:8081
+```
+
+Identifiants locaux :
+
+```text
+Utilisateur : admin
+Mot de passe : admin
+```
+
+Le port `8081` est utilisé sur l'hôte afin d'éviter un conflit avec le
+port `8080` déjà occupé.
+
+### Configuration du DAG
+
+Le DAG principal est défini dans :
+
+```text
+dags/tradecorp_etl_pipeline.py
+```
+
+Paramètres :
+
+```text
+dag_id          : tradecorp_etl_pipeline
+date de début   : 2024-01-01
+planification   : 0 6 * * *
+catchup         : False
+retries         : 1
+retry_delay     : 5 minutes
+max_active_runs : 1
+tags            : tradecorp, etl, spark
+```
+
+L'expression cron `0 6 * * *` demande une planification quotidienne à
+06:00 dans le fuseau horaire utilisé par Airflow.
+
+`catchup=False` empêche Airflow de créer toutes les exécutions
+historiques comprises entre le 1er janvier 2024 et la date actuelle.
+
+`max_active_runs=1` empêche deux exécutions d'utiliser simultanément le
+même répertoire de staging.
+
+### Enchaînement des tâches
+
+```text
+wait_for_trigger_file
+          │
+          ▼
+fetch_exchange_rates
+          │
+          ▼
+       reader
+          │
+          ▼
+     transformer
+          │
+          ▼
+       writer
+```
+
+Les quatre étapes métier utilisent `DockerOperator`.
+
+Chaque opérateur :
+
+- lance l'image `tradecorp-modulaire-pyspark:latest` ;
+- utilise le socket `/var/run/docker.sock` ;
+- rejoint le réseau `tradecorp-modulaire-network` ;
+- monte `src`, `data` et `.env` ;
+- reçoit les secrets Azure avec `private_environment` ;
+- supprime son conteneur après une exécution réussie.
+
+### Échange de données entre les tâches
+
+La tâche `reader` télécharge et conserve les entrées dans :
+
+```text
+/home/jovyan/data/tmp/airflow
+```
+
+La tâche `transformer` écrit son résultat dans la valeur définie par :
+
+```dotenv
+STAGING_PARQUET_PATH=/home/jovyan/data/staging/orders_enriched
+```
+
+La tâche `writer` lit ce même Parquet avant de l'envoyer dans :
+
+```text
+clean/orders_enriched.parquet/
+```
+
+### Déclenchement avec FileSensor
+
+Le bonus `FileSensor` attend le fichier :
+
+```text
+data/trigger/go.txt
+```
+
+Création du signal :
+
+```powershell
+New-Item -ItemType File -Force .\data\trigger\go.txt
+```
+
+Suppression après l'exécution :
+
+```powershell
+Remove-Item -LiteralPath .\data\trigger\go.txt
+```
+
+Le mode `reschedule` libère le processus Airflow entre deux contrôles du
+fichier.
+
+### Extraits de logs validés
+
+Lecture des taux :
+
+```text
+Taux de change chargés : 166
+```
+
+Résultat intermédiaire :
+
+```text
+Parquet intermédiaire : 2082 lignes, 23 colonnes
+```
+
+Upload final :
+
+```text
+Fichier Parquet envoyé : clean/orders_enriched.parquet/part-00000-031abd60-6125-4df3-8625-82e4eca84dfa-c000.snappy.parquet
+Fichier Parquet envoyé : clean/orders_enriched.parquet/_SUCCESS
+Écriture terminée avec succès : clean/orders_enriched.parquet
+```
+
+### Idempotence
+
+Avant chaque upload, `writer.py` supprime les anciens blobs portant le
+même préfixe. Le DataFrame est ensuite réduit avec `coalesce(1)`.
+
+Après plusieurs exécutions, le répertoire final contient donc :
+
+```text
+un marqueur _SUCCESS
+un seul fichier part-*.snappy.parquet
+```
+
+### Gestion et reprise d'un échec
+
+Le scénario d'échec a été testé avec :
+
+```dotenv
+COUNTRY_CURRENCY_FILENAME=country_currency_missing.csv
+```
+
+Résultat observé :
+
+```text
+reader      : failed
+transformer : upstream_failed
+writer      : upstream_failed
+```
+
+Après restauration de `country_currency.csv`, l'action **Clear** a été
+appliquée à `reader` avec l'option **Downstream**.
+
+Airflow a alors relancé uniquement :
+
+```text
+reader → transformer → writer
+```
+
+Les tâches déjà réussies n'ont pas été rejouées.
+
+### Signification de Next Run
+
+`Next Run` indique la prochaine exécution que le scheduler créera selon
+l'expression `0 6 * * *`.
+
+L'interface Airflow affiche les dates dans le fuseau configuré par
+Airflow, ici UTC. La valeur ne correspond pas à un compte à rebours :
+elle représente la prochaine échéance logique calculée par le
+scheduler.
+
+Avec `catchup=False`, Airflow n'essaie pas de recréer les exécutions
+quotidiennes antérieures depuis 2024.
+
+### Preuves d'exécution
+
+#### Graphe et exécution réussie
+
+![Grid Airflow en succès](captures/02-airflow-grid-success.png)
+
+#### Logs de la tâche writer
+
+![Upload Parquet par writer](captures/05-airflow-writer-upload-log.png)
+
+#### Prochaine exécution planifiée
+
+![Next Run Airflow](captures/06-airflow-next-run.png)
+
+#### Échec contrôlé de reader
+
+![Échec contrôlé de reader](captures/07-airflow-reader-failure.png)
+
+#### Reprise après Clear
+
+![Récupération après Clear](captures/08-airflow-clear-recovery.png)
+
+#### FileSensor en attente
+
+![FileSensor en attente](captures/bonus-filesensor-waiting.png)
+
+#### FileSensor terminé
+
+![FileSensor en succès](captures/bonus-filesensor-success.png)
