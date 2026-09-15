@@ -1,6 +1,15 @@
-from pyspark.sql import DataFrame
+import logging
+import os
+from pathlib import Path
+
+from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
+from enrichment import add_currency_column
+from reader import (
+    load_business_csvs,
+    load_reference_files,
+)
 from utils import (
     add_sous_total,
     clean_customers,
@@ -9,6 +18,9 @@ from utils import (
     clean_orders,
     clean_products,
 )
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 FINAL_COLUMNS = [
@@ -150,3 +162,125 @@ def build_enriched(
     )
 
     return enriched.select(*FINAL_COLUMNS)
+
+
+def main() -> None:
+    """Transforme les données et produit le Parquet intermédiaire."""
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+    spark = None
+
+    try:
+        LOGGER.info("Démarrage de la SparkSession")
+
+        spark = (
+            SparkSession.builder
+            .appName("TradeCorp Transformer")
+            .getOrCreate()
+        )
+
+        spark.sparkContext.setLogLevel("WARN")
+
+        temporary_root = Path(
+            os.getenv(
+                "LOCAL_TMP_DIR",
+                "/home/jovyan/data/tmp",
+            )
+        )
+
+        staging_root = temporary_root / "airflow"
+        business_directory = staging_root / "business"
+        reference_directory = staging_root / "reference"
+        default_transformed_directory = (
+            staging_root / "transformed"
+        )
+
+        transformed_directory = Path(
+            os.getenv(
+                "STAGING_PARQUET_PATH",
+                str(default_transformed_directory),
+            )
+        )
+
+        LOGGER.info(
+            "Lecture des fichiers métier depuis %s",
+            business_directory,
+        )
+
+        dataframes = load_business_csvs(
+            spark,
+            business_directory,
+        )
+
+        LOGGER.info(
+            "Nettoyage et jointure des données métier"
+        )
+
+        transformed = build_enriched(dataframes)
+
+        LOGGER.info(
+            "Lecture des références depuis %s",
+            reference_directory,
+        )
+
+        country_currency, exchange_rates = (
+            load_reference_files(
+                spark,
+                reference_directory,
+            )
+        )
+
+        LOGGER.info(
+            "Ajout des devises et des montants locaux"
+        )
+
+        enriched = add_currency_column(
+            transformed,
+            country_currency,
+            exchange_rates,
+        )
+
+        row_count = enriched.count()
+
+        LOGGER.info(
+            "DataFrame final : %s lignes, %s colonnes",
+            row_count,
+            len(enriched.columns),
+        )
+
+        LOGGER.info(
+            "Colonnes finales : %s",
+            ", ".join(enriched.columns),
+        )
+
+        LOGGER.info(
+            "Écriture du Parquet intermédiaire dans %s",
+            transformed_directory,
+        )
+
+        enriched.write.mode("overwrite").parquet(
+            str(transformed_directory)
+        )
+
+        LOGGER.info(
+            "Transformation terminée avec succès"
+        )
+
+    except Exception:
+        LOGGER.exception(
+            "Échec de la transformation"
+        )
+        raise
+
+    finally:
+        if spark is not None:
+            LOGGER.info("Arrêt de la SparkSession")
+            spark.stop()
+
+
+if __name__ == "__main__":
+    main()

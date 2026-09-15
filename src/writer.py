@@ -3,7 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from pyspark.sql import DataFrame
+from pyspark.sql import DataFrame, SparkSession
 
 from utils import create_blob_service_client
 
@@ -35,7 +35,13 @@ def write_parquet(
             parquet_directory,
         )
 
-        df.write.mode("overwrite").parquet(
+        LOGGER.info(
+            "Réduction du résultat à une partition Parquet"
+        )
+
+        df.coalesce(1).write.mode(
+            "overwrite"
+        ).parquet(
             str(parquet_directory)
         )
 
@@ -43,7 +49,23 @@ def write_parquet(
             create_blob_service_client()
             .get_container_client(container_name)
         )
+        existing_blob_names = [
+            blob.name
+            for blob in container_client.list_blobs(
+                name_starts_with=f"{blob_prefix}/"
+            )
+        ]
 
+        for existing_blob_name in existing_blob_names:
+            container_client.delete_blob(
+                existing_blob_name
+            )
+
+            LOGGER.info(
+                "Ancien fichier supprimé : %s/%s",
+                container_name,
+                existing_blob_name,
+            )
         for local_file in parquet_directory.rglob("*"):
             if not local_file.is_file():
                 continue
@@ -71,3 +93,95 @@ def write_parquet(
             )
 
     return f"{container_name}/{blob_prefix}"
+
+
+def main() -> None:
+    """Lit le résultat intermédiaire et l'envoie dans ADLS clean."""
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+    spark = None
+
+    try:
+        LOGGER.info("Démarrage de la SparkSession")
+
+        spark = (
+            SparkSession.builder
+            .appName("TradeCorp Writer")
+            .getOrCreate()
+        )
+
+        spark.sparkContext.setLogLevel("WARN")
+
+        temporary_root = Path(
+            os.getenv(
+                "LOCAL_TMP_DIR",
+                "/home/jovyan/data/tmp",
+            )
+        )
+        default_transformed_directory = (
+            temporary_root
+            / "airflow"
+            / "transformed"
+        )
+
+        transformed_directory = Path(
+            os.getenv(
+                "STAGING_PARQUET_PATH",
+                str(default_transformed_directory),
+            )
+        )
+
+        if not transformed_directory.is_dir():
+            raise FileNotFoundError(
+                "Parquet intermédiaire introuvable : "
+                f"{transformed_directory}"
+            )
+
+        LOGGER.info(
+            "Lecture du Parquet intermédiaire : %s",
+            transformed_directory,
+        )
+
+        dataframe = spark.read.parquet(
+            str(transformed_directory)
+        )
+
+        LOGGER.info(
+            "Parquet intermédiaire : %s lignes, %s colonnes",
+            dataframe.count(),
+            len(dataframe.columns),
+        )
+
+        output_name = os.getenv(
+            "CLEAN_OUTPUT_PATH",
+            "orders_enriched.parquet",
+        )
+
+        destination = write_parquet(
+            dataframe,
+            output_name,
+        )
+
+        LOGGER.info(
+            "Écriture terminée avec succès : %s",
+            destination,
+        )
+
+    except Exception:
+        LOGGER.exception(
+            "Échec de l'écriture dans ADLS clean"
+        )
+        raise
+
+    finally:
+        if spark is not None:
+            LOGGER.info("Arrêt de la SparkSession")
+            spark.stop()
+
+
+if __name__ == "__main__":
+    main()

@@ -14,7 +14,85 @@ services:
       - ./src:/home/jovyan/src
       - ./tests:/home/jovyan/tests
       - ./data:/home/jovyan/data
+      - ./notebooks:/home/jovyan/notebooks
     environment:
       JUPYTER_ENABLE_LAB: "yes"
       PYTHONPATH: "/home/jovyan/src"
     restart: unless-stopped
+
+  postgres:
+    image: postgres:15
+    container_name: tradecorp-modulaire-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: tradecorp-modulaire-airflow:2.8.0
+    container_name: tradecorp-modulaire-airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    user: "${AIRFLOW_UID:-50000}:0"
+    env_file:
+      - .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW_CONN_FS_DEFAULT: "fs:///?path=/"
+      AIRFLOW__WEBSERVER__WORKERS: "1"
+      AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: "300"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      PYTHONPATH: /opt/airflow/src
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - ./logs:/opt/airflow/logs
+      - ./.env:/opt/airflow/.env:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname TradeCorp \
+          --role Admin \
+          --email admin@tradecorp.local || true
+        airflow scheduler &
+        exec airflow webserver
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  airflow-postgres-data:
+    name: tradecorp-modulaire-airflow-postgres-data
+
+networks:
+  default:
+    name: tradecorp-modulaire-network

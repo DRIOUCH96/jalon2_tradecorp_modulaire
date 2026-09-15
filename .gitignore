@@ -20,3 +20,9 @@ data/output/
 # Fichiers système
 .DS_Store
 Thumbs.db
+# Journaux générés par Airflow
+logs/
+# Signal temporaire du FileSensor
+data/trigger/*.txt
+# Parquet intermédiaire partagé entre les tâches
+data/staging/
